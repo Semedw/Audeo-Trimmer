@@ -4,6 +4,7 @@ import { TimelineEditor } from './components/TimelineEditor'
 import { UploadDropzone } from './components/UploadDropzone'
 import { WaveformView } from './components/WaveformView'
 import { useHistory } from './hooks/useHistory'
+import { isFFmpegReady, initFFmpeg } from './services/ffmpeg'
 import type { MediaKind, ProcessResult, TrimRange, UploadResult } from './types'
 import { formatSeconds } from './utils/time'
 
@@ -17,21 +18,43 @@ function App() {
   const [sourceFile, setSourceFile] = useState<File | null>(null)
   const [upload, setUpload] = useState<UploadResult | null>(null)
   const [result, setResult] = useState<ProcessResult | null>(null)
+  const [resultBlob, setResultBlob] = useState<Blob | null>(null)
   const [processing, setProcessing] = useState(false)
   const [progress, setProgress] = useState(0)
+  const [statusText, setStatusText] = useState('')
   const [error, setError] = useState<string>()
   const [outputFormat, setOutputFormat] = useState<string>('')
+  const [ffmpegLoading, setFFmpegLoading] = useState(!isFFmpegReady())
   const rangesHistory = useHistory<TrimRange[]>([])
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
 
   const duration = upload?.metadata.duration_seconds ?? 0
-  const sourceUrl = useMemo(() => (sourceFile ? URL.createObjectURL(sourceFile) : undefined), [sourceFile])
+  const sourceUrl = useMemo(
+    () => (sourceFile ? URL.createObjectURL(sourceFile) : undefined),
+    [sourceFile]
+  )
   const mediaKind: MediaKind | undefined = upload
     ? upload.metadata.has_video
       ? 'video'
       : 'audio'
     : undefined
+
+  const resultUrl = useMemo(
+    () => (resultBlob ? downloadUrl(resultBlob) : undefined),
+    [resultBlob]
+  )
+
+  useEffect(() => {
+    if (ffmpegLoading) {
+      initFFmpeg()
+        .then(() => setFFmpegLoading(false))
+        .catch(() => {
+          setError('Failed to load media processor. Check your connection and reload.')
+          setFFmpegLoading(false)
+        })
+    }
+  }, [ffmpegLoading])
 
   const addRange = useCallback(() => {
     if (!duration) return
@@ -64,12 +87,14 @@ function App() {
   useEffect(() => {
     return () => {
       if (sourceUrl) URL.revokeObjectURL(sourceUrl)
+      if (resultUrl) URL.revokeObjectURL(resultUrl)
     }
-  }, [sourceUrl])
+  }, [sourceUrl, resultUrl])
 
   const onUpload = async (file: File) => {
     setError(undefined)
     setResult(null)
+    setResultBlob(null)
     setUpload(null)
     rangesHistory.set([])
     setSourceFile(file)
@@ -99,25 +124,43 @@ function App() {
   )
 
   const process = async () => {
-    if (!upload) return
+    if (!upload || !sourceFile) return
     setError(undefined)
     setResult(null)
+    setResultBlob(null)
     setProcessing(true)
-    setProgress(5)
-
-    const ticker = window.setInterval(() => {
-      setProgress((value) => Math.min(95, value + 4))
-    }, 240)
+    setProgress(0)
+    setStatusText('Starting...')
 
     try {
-      const processed = await processMedia(upload.file_id, sortedRanges, outputFormat || undefined)
-      setResult(processed)
+      const processed = await processMedia(
+        sourceFile,
+        sortedRanges,
+        upload.metadata.duration_seconds,
+        upload.metadata.has_video,
+        outputFormat || undefined,
+        (phase, pct) => {
+          setStatusText(phase)
+          setProgress(pct)
+        }
+      )
+      setResult({
+        result_id: processed.result_id,
+        output_filename: processed.output_filename,
+        output_format: processed.output_format,
+        processing_mode: processed.processing_mode,
+        removed_ranges: processed.removed_ranges,
+        kept_ranges: processed.kept_ranges,
+      })
+      setResultBlob(processed.blob)
       setProgress(100)
     } catch (processError) {
       setError(processError instanceof Error ? processError.message : 'Processing failed')
     } finally {
-      window.clearInterval(ticker)
-      window.setTimeout(() => setProgress(0), 700)
+      window.setTimeout(() => {
+        setProgress(0)
+        setStatusText('')
+      }, 1000)
       setProcessing(false)
     }
   }
@@ -129,7 +172,13 @@ function App() {
         <p>Upload media, mark segments to remove, and export one clean merged file.</p>
       </header>
 
-      <UploadDropzone disabled={processing} onFileSelect={onUpload} />
+      {ffmpegLoading && (
+        <section className="panel">
+          <p>Loading media processor&hellip;</p>
+        </section>
+      )}
+
+      <UploadDropzone disabled={processing || ffmpegLoading} onFileSelect={onUpload} />
 
       {upload && (
         <section className="panel meta-grid">
@@ -188,7 +237,10 @@ function App() {
           <div className="row gap-sm">
             <label>
               Output format
-              <select value={outputFormat} onChange={(event) => setOutputFormat(event.target.value)}>
+              <select
+                value={outputFormat}
+                onChange={(event) => setOutputFormat(event.target.value)}
+              >
                 {OUTPUT_FORMATS.map((fmt) => (
                   <option key={fmt} value={fmt}>
                     {fmt.toUpperCase()}
@@ -196,7 +248,7 @@ function App() {
                 ))}
               </select>
             </label>
-            <button onClick={process} disabled={processing}>
+            <button onClick={process} disabled={processing || ffmpegLoading}>
               {processing ? 'Processing...' : 'Process & Merge'}
             </button>
           </div>
@@ -205,19 +257,20 @@ function App() {
               <div className="progress-fill" style={{ width: `${progress}%` }} />
             </div>
           )}
+          {statusText && <p className="muted">{statusText}</p>}
         </section>
       )}
 
-      {result && (
+      {result && resultUrl && (
         <section className="panel">
           <h3>Preview & Export</h3>
           {mediaKind === 'video' ? (
-            <video src={downloadUrl(result.result_id)} controls />
+            <video src={resultUrl} controls />
           ) : (
-            <audio src={downloadUrl(result.result_id)} controls />
+            <audio src={resultUrl} controls />
           )}
           <div className="row gap-sm">
-            <a className="button-link" href={downloadUrl(result.result_id)}>
+            <a className="button-link" href={resultUrl} download={result.output_filename}>
               Download {result.output_filename}
             </a>
             <span className="badge">{result.processing_mode.toUpperCase()}</span>
@@ -228,7 +281,8 @@ function App() {
       {error && <p className="error">{error}</p>}
 
       <footer className="footer">
-        Format: <kbd>HH:MM:SS.mmm</kbd>. Shortcuts: <kbd>A</kbd> add range, <kbd>Ctrl/Cmd+Z</kbd> undo, <kbd>Ctrl/Cmd+Shift+Z</kbd> redo
+        Format: <kbd>HH:MM:SS.mmm</kbd>. Shortcuts: <kbd>A</kbd> add range,{' '}
+        <kbd>Ctrl/Cmd+Z</kbd> undo, <kbd>Ctrl/Cmd+Shift+Z</kbd> redo
       </footer>
     </main>
   )

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const root = join(__dirname, '..')
 
-const srcDir = join(root, 'node_modules', '@ffmpeg', 'core', 'dist', 'umd')
+const srcDir = join(root, 'node_modules', '@ffmpeg', 'core', 'dist', 'esm')
 const dstDir = join(root, 'public', 'ffmpeg')
 
 if (!existsSync(srcDir)) {

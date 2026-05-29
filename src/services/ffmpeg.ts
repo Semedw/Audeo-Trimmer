@@ -1,5 +1,4 @@
 import { FFmpeg } from '@ffmpeg/ffmpeg'
-import { toBlobURL } from '@ffmpeg/util'
 
 let ffmpeg: FFmpeg | null = null
 let loadingPromise: Promise<FFmpeg> | null = null
@@ -21,20 +20,12 @@ export async function initFFmpeg(
       instance.on('progress', ({ progress: ratio }) => {
         onLoadProgress(ratio)
       })
-    } else {
-      instance.on('progress', () => {})
     }
 
     const baseURL = '/ffmpeg'
     await instance.load({
-      coreURL: await toBlobURL(
-        `${baseURL}/ffmpeg-core.js`,
-        'text/javascript'
-      ),
-      wasmURL: await toBlobURL(
-        `${baseURL}/ffmpeg-core.wasm`,
-        'application/wasm'
-      ),
+      coreURL: `${baseURL}/ffmpeg-core.js`,
+      wasmURL: `${baseURL}/ffmpeg-core.wasm`,
     })
 
     ffmpeg = instance

@@ -60,3 +60,6 @@ Push to Vercel — auto-detected as Vite. Zero config needed.
 ## Range Format
 
 Manual range input uses `HH:MM:SS.mmm` (example: `00:02:34.125`).
+
+
+The URL: https://audeo-trimmer.vercel.app/
